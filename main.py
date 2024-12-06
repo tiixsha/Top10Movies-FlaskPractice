@@ -10,6 +10,11 @@ from wtforms.form import BaseForm
 from wtforms.validators import DataRequired
 import requests
 
+MOVIE_DB_API_KEY = "NOT_A_REAL_KEY"
+MOVIE_DB_SEARCH_URL = "https://api.themoviedb.org/3/search/movie"
+MOVIE_DB_INFO_URL = "https://api.themoviedb.org/3/movie"
+MOVIE_DB_IMAGE_URL = "https://image.tmdb.org/t/p/w500"
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '1234'
 Bootstrap5(app)
@@ -20,7 +25,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///movies.db'
 db = SQLAlchemy(model_class=Base)
 db.init_app(app)
 
-class MyForm(FlaskForm):
+class UpdateForm(FlaskForm):
     rating = StringField(validators=[
         InputRequired(), Length(min=1, max=4)], render_kw={"placeholder": "Rating"})
     review = StringField(validators=[
@@ -28,7 +33,11 @@ class MyForm(FlaskForm):
 
     submit = SubmitField('Update')
 
-##CREATE TABLE
+class AddForm(FlaskForm):
+    title = StringField(validators = [InputRequired()],render_kw = {"placeholder":"Title"})
+    submit = SubmitField('Add')
+
+
 class Movie(db.Model):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(250), unique=True, nullable=False)
@@ -74,12 +83,17 @@ def home():\
     # a scalar refers to individual elements (usually rows or specific columns) in a query result,
     # rather than complex row-like objects or tuples.
     all_movies = result.scalars().all()
-    return render_template('index.html', movies=all_movies)
+    movies = Movie.query.filter_by(id=all_movies.id).order_by(Movie.rating.dsc()).all
+    for i in range(len(movies)):
+        movies[i].ranking = len(movies) - i
+    db.session.commit()
+
+    return render_template('index.html', movies=movies)
 
 
 @app.route('/update',methods = ['GET','POST'])
 def update():
-    form = MyForm()
+    form = UpdateForm()
     movie_id = request.args.get("movie_id") #gets the movie id from url sent from index.html
     movie = db.get_or_404(Movie,movie_id) # gets the data from database that matches the movie id or gives 404  error
     if form.validate_on_submit():
@@ -95,6 +109,35 @@ def delete(movie_id):
     db.session.delete(movie_delete)
     db.session.commit()
     return redirect(url_for('home'))
+
+@app.route('/add', methods = ['GET','POST'])
+def add():
+    form = AddForm()
+    if form.validate_on_submit():
+        if form.validate_on_submit():
+            movie_title = form.title.data
+            response = requests.get(MOVIE_DB_SEARCH_URL, params={"api_key": MOVIE_DB_API_KEY, "query": movie_title})
+            data = response.json()["results"]
+            return render_template("select.html", options=data)
+    return render_template('add.html',form = form)
+
+@app.route('find')
+def find():
+    movie_api_id = request.args.get("id")
+    if movie_api_id:
+        movie_api_url = f"{MOVIE_DB_INFO_URL}/{movie_api_id}"
+        response = requests.get(movie_api_url, params={"api_key": MOVIE_DB_API_KEY, "language": "en-US"})
+        data = response.json()
+        new_movie = Movie(
+            title=data["title"],
+            year=data["release_date"].split("-")[0],
+            img_url=f"{MOVIE_DB_IMAGE_URL}{data['poster_path']}",
+            description=data["overview"]
+        )
+        db.session.add(new_movie)
+        db.session.commit()
+        return redirect(url_for("edit", id = new_movie.id))
+
 
 if __name__ == '__main__':
     app.run(debug=True)
